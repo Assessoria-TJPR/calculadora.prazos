@@ -116,13 +116,19 @@ const AuthProvider = ({ children }) => {
     const updateUserAndAdminStatus = async (firebaseUser) => {
         if (firebaseUser) {
             setUser(firebaseUser);
+            // Adiciona uma pequena espera para dar tempo à Cloud Function de criar o documento do usuário.
+            // Isso ajuda a evitar a "race condition" em que o front-end verifica o documento antes de ele existir.
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
             try {
                 const userDoc = await db.collection('users').doc(firebaseUser.uid).get();
                 if (userDoc.exists) {
                     setUserData(userDoc.data());
                 } else {
-                    // Se o documento não existe, desloga por segurança.
-                    console.warn("Documento do usuário não encontrado no Firestore. Deslogando.");
+                    // Se o documento ainda não existe após a espera, é provável que tenha ocorrido um erro.
+                    // Desloga o usuário por segurança.
+                    console.error("Documento do usuário não encontrado no Firestore após a espera. Deslogando.");
+                    alert("Ocorreu um erro ao finalizar seu cadastro. Por favor, tente fazer o login novamente em alguns instantes. Se o problema persistir, contate o suporte.");
                     auth.signOut();
                     setUserData(null);
                 }
@@ -466,137 +472,6 @@ const CalculadoraDePrazo = ({ numeroProcesso }) => {
     }
   };
 
-  // --- Funções de Geração de Minutas (conforme o código fornecido) ---
-
-  // Template para o documento Word
-  const getDocTemplate = (bodyHtml, pStyle, pCenterStyle) => `
-      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head><meta charset='utf-8'><title>Minuta Despacho</title></head>
-      <body>
-          <div style="font-family: Arial, sans-serif; font-size: 16pt; line-height: 1.5;">
-              ${bodyHtml}
-              <p style="${pStyle}">Intime-se. Diligências necessárias.</p>
-              <br>
-              <p style="${pCenterStyle}">Curitiba, data da assinatura digital.</p>
-              <br><br>
-              <p style="${pCenterStyle}"><b>Desembargador HAYTON LEE SWAIN FILHO</b></p>
-              <p style="${pCenterStyle}">1º Vice-Presidente do Tribunal de Justiça do Estado do Paraná</p>
-          </div>
-      </body>
-      </html>
-  `;
-
-  // Função para gerar um arquivo .doc a partir de um conteúdo HTML
-  const generateDocFromHtml = (bodyHtml, minutaType, placeholders, outputFileName) => {
-    try {
-        // Estilos comuns para os parágrafos
-        const pStyle = "text-align: justify; text-indent: 50px; margin-bottom: 1em;";
-        const pCenterStyle = "text-align: center; margin: 0;";
-        const sourceHTML = getDocTemplate(bodyHtml, pStyle, pCenterStyle);
- 
-        const blob = new Blob([sourceHTML], { type: 'application/msword' });
-        saveAs(blob, outputFileName);
-    } catch (err) {
-        console.error("Erro ao gerar documento:", err);
-        setError(`Ocorreu um erro ao gerar o arquivo. Verifique o console ou tente em outro navegador.`);
-    }
-  };
-
-  // Função para buscar a minuta do Firestore ou usar o padrão
-  const getMinutaContent = async (minutaType) => {
-    // Se o usuário for de um setor específico, tenta buscar a minuta personalizada
-    if (userData?.setorId) {
-        const docId = `${userData.setorId}_${minutaType}`;
-        try {
-            const docRef = db.collection('minutas').doc(docId);
-            const doc = await docRef.get();
-            if (doc.exists) {
-                return doc.data().conteudo;
-            }
-        } catch (err) {
-            console.error(`Erro ao buscar minuta personalizada '${docId}'. Usando padrão.`, err);
-        }
-    }
-    // Se não houver setor, ou se a busca falhar, ou se o documento não existir, usa o padrão.
-    return MINUTAS_PADRAO[minutaType];
-  };
-
-  const replacePlaceholders = (template, placeholders) => {
-    return Object.entries(placeholders).reduce((acc, [key, value]) => acc.replace(new RegExp(key, 'g'), value), template);
-  };
-
-  const gerarMinutaIntempestividade = async () => {
-    const { dataPublicacao, inicioPrazo, prazo, suspensoesComprovaveis } = resultado;
-    const todasSuspensoes = new Set(suspensoesComprovaveis.map(d => d.data.toISOString().split('T')[0]));
-    const prazoFinalMaximo = calcularPrazoFinalDiasUteis(inicioPrazo, prazo, todasSuspensoes, true, true).prazoFinal;
-    
-    const dataDispStr = formatarData(new Date(dataDisponibilizacao + 'T00:00:00'));
-    const dataPubStr = formatarData(dataPublicacao);
-    const inicioPrazoStr = formatarData(inicioPrazo);
-    const dataInterposicaoStr = formatarData(new Date(dataInterposicao + 'T00:00:00'));
-
-    const placeholders = {
-        '{{numeroProcesso}}': numeroProcesso || '<span style="color: red;">[Nº Processo]</span>',
-        '{{movAcordao}}': '<span style="color: red;">[Mov. Acórdão]</span>',
-        '{{dataDisponibilizacao}}': dataDispStr, // O template usa 'dataLeitura', mas o valor correto é da disponibilização
-        '{{dataPublicacao}}': dataPubStr,
-        '{{inicioPrazo}}': inicioPrazoStr,
-        '{{dataInterposicao}}': dataInterposicaoStr,
-        '{{prazoDias}}': prazoSelecionado,
-    };
-
-    const template = await getMinutaContent('intempestividade');
-    const corpoMinuta = replacePlaceholders(template, placeholders);
-
-    generateDocFromHtml(
-        corpoMinuta,
-        'intempestividade',
-        placeholders,
-        `Minuta_Intempestividade_${numeroProcesso.replace(/\D/g, '') || 'processo'}.doc`
-    );
-  };
-
-  const gerarMinutaIntimacaoDecreto = async () => {
-    const template = await getMinutaContent('intimacao_decreto');
-    // Esta minuta não tem placeholders, então o corpo é o próprio template.
-    const corpoMinuta = template;
-
-    generateDocFromHtml(
-        corpoMinuta,
-        'intimacao_decreto',
-        {},
-        `Minuta_Intimacao_Decreto_${numeroProcesso.replace(/\D/g, '') || 'processo'}.doc`
-    );
-  };
-
-  const gerarMinutaFaltaDecreto = async () => {
-    const { inicioPrazo, semDecreto } = resultado;
-    const dataDispStr = formatarData(new Date(dataDisponibilizacao + 'T00:00:00'));
-    const inicioPrazoStr = formatarData(inicioPrazo);
-    const prazoFinalStr = formatarData(semDecreto.prazoFinal);
-
-    const placeholders = {
-        '{{camara}}': '<span style="color: red;">[Nº da Câmara]</span>',
-        '{{recursoApelacao}}': '<span style="color: red;">[Tipo e Mov. do Recurso]</span>',
-        '{{dataLeitura}}': dataDispStr, // O template usa 'dataLeitura', mas o valor correto é da disponibilização
-        '{{movIntimacao}}': '<span style="color: red;">[Mov. Intimação]</span>',
-        '{{inicioPrazo}}': inicioPrazoStr,
-        '{{prazoFinal}}': prazoFinalStr,
-        '{{movDespacho}}': '<span style="color: red;">[Mov. Despacho]</span>',
-        '{{movCertidao}}': '<span style="color: red;">[Mov. Certidão]</span>',
-    };
-
-    const template = await getMinutaContent('falta_decreto');
-    const corpoMinuta = replacePlaceholders(template, placeholders);
-
-    generateDocFromHtml(
-        corpoMinuta,
-        'falta_decreto',
-        placeholders,
-        `Minuta_Intempestivo_Falta_Decreto_${numeroProcesso.replace(/\D/g, '') || 'processo'}.doc`
-    );
-  };
-
   return (
     <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl p-8 rounded-2xl shadow-lg border border-slate-200/50 dark:border-slate-700/50">
         <UserIDWatermark overlay={true} />
@@ -760,6 +635,7 @@ const LoginPage = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [displayName, setDisplayName] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [rememberMe, setRememberMe] = useState(true);
     const [setorNome, setSetorNome] = useState(''); // Novo estado para o nome do setor
     const [setorIdSelecionado, setSetorIdSelecionado] = useState(''); // Para o <select>
@@ -772,19 +648,8 @@ const LoginPage = () => {
 
     // Busca os setores do Firestore quando o modo de registro é ativado
     useEffect(() => {
-        if (!isLogin && db) {
-            const fetchSetores = async () => {
-                try {
-                    const snapshot = await db.collection('setores').orderBy('nome').get();
-                    const setoresList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setSetores(setoresList);
-                } catch (err) {
-                    console.error("Erro ao buscar setores para o registro:", err);
-                    setError("Não foi possível carregar a lista de setores.");
-                }
-            };
-            fetchSetores();
-        }
+        // A busca de setores foi removida da tela de registro para simplificar o fluxo
+        // e resolver problemas de permissão. A atribuição de setor agora é feita por um admin.
     }, [isLogin]);
     const handlePasswordReset = async (e) => {
         e.preventDefault();
@@ -838,61 +703,36 @@ const LoginPage = () => {
                 await auth.signInWithEmailAndPassword(finalEmail, password);
                 localStorage.setItem('lastUserEmail', finalEmail);
             } else {
-                // Validação do setor na tela de registro
-                const isCreatingNew = setorIdSelecionado === '__novo__';
-                if (!isCreatingNew && !setorIdSelecionado) {
-                    setError("Por favor, selecione o seu setor.");
-                    return;
-                }
-                if (isCreatingNew && !setorNome.trim()) {
-                    setError("Por favor, digite o nome do novo setor.");
+                // Validação da confirmação de senha
+                if (password !== confirmPassword) {
+                    setError('As senhas não coincidem. Por favor, tente novamente.');
                     return;
                 }
 
-                let setorIdFinal;
-                let userCredential;
+                // Validação do setor na tela de registro
+                // A lógica de seleção/criação de setor foi removida do registro.
+                // O usuário será criado sem setor e um admin o atribuirá posteriormente.
+                // Isso simplifica o fluxo e evita erros de permissão.
 
                 // Cria o usuário primeiro para ter o UID
-                userCredential = await auth.createUserWithEmailAndPassword(finalEmail, password);
+                const userCredential = await auth.createUserWithEmailAndPassword(finalEmail, password);
 
-                if (isCreatingNew) {
-                    // Lógica para criar um novo setor usando uma transação em lote (batch)
-                    const nomeNormalizado = normalizeString(setorNome);
-                    
-                    if (userCredential?.user) {
-                        // Prepara a transação em lote
-                        const batch = db.batch();
-
-                        // 1. Documento do novo setor
-                        const novoSetorRef = db.collection('setores').doc(); // Gera um ID automaticamente
-                        batch.set(novoSetorRef, { nome: setorNome.trim(), nomeNormalizado: nomeNormalizado });
-
-                        // 2. Documento de bloqueio para garantir unicidade do nome
-                        const nomeUnicoRef = db.collection('setorNomesUnicos').doc(nomeNormalizado);
-                        batch.set(nomeUnicoRef, { setorId: novoSetorRef.id });
-
-                        // Executa a transação
-                        await batch.commit();
-
-                        setorIdFinal = novoSetorRef.id; // Usa o ID gerado
-                    }
-                } else {
-                    // Usa o ID do setor selecionado na lista
-                    setorIdFinal = setorIdSelecionado;
-                }
-
-                await db.collection('users').doc(userCredential.user.uid).set({ 
-                    email: finalEmail, 
-                    role: 'basic', 
+                // CRIAÇÃO DO DOCUMENTO DO USUÁRIO NO CLIENT-SIDE
+                // Isso garante que o perfil exista antes de qualquer tentativa de login.
+                await db.collection('users').doc(userCredential.user.uid).set({
+                    email: finalEmail,
                     displayName: displayName.trim(),
-                    setorId: setorIdFinal // Adiciona o ID do setor encontrado ou criado
+                    role: 'basic',
+                    setorId: null,
+                    avatarColor: '#6366F1', // Cor padrão
+                    emailVerified: false,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
 
-                // 3. Executa outras tarefas (atualizar perfil e enviar e-mail)
+                // Atualiza o perfil do Firebase Auth com o nome de exibição e envia o e-mail de verificação.
                 await userCredential.user.updateProfile({ displayName: displayName.trim() });
                 await userCredential.user.sendEmailVerification();
 
-                setMessage("Conta criada! Enviamos um link de verificação para o seu e-mail.");
             }
         } catch (err) {
             switch (err.code) {
@@ -945,10 +785,8 @@ const LoginPage = () => {
         e.preventDefault();
         const newIsLogin = !isLogin;
         setIsLogin(newIsLogin);
-        setError('');
-        if (!newIsLogin) { // Se estiver mudando para a tela de registro
-            fetchSetores();
-        }
+        setError(''); // Limpa erros ao trocar de modo
+        // A chamada a fetchSetores foi removida pois a lógica de setores no registro foi simplificada.
     };
 
     return (
@@ -979,28 +817,13 @@ const LoginPage = () => {
                         <h2 className="text-3xl font-bold text-center text-slate-800 dark:text-slate-100">{isLogin ? 'Login' : 'Criar Conta'}</h2>
                         <form onSubmit={handleSubmit} className="space-y-4">
                             {!isLogin && <input type="text" placeholder="Nome Completo" value={displayName} onChange={e => setDisplayName(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />}
-                            {!isLogin && (<>
-                                <select 
-                                    value={setorIdSelecionado} 
-                                    onChange={e => setSetorIdSelecionado(e.target.value)} 
-                                    required 
-                                    className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
-                                >
-                                    <option value="" disabled>Selecione seu setor...</option>
-                                    {setores.map(setor => <option key={setor.id} value={setor.id}>{setor.nome}</option>)}
-                                    <option value="__novo__" className="font-bold text-indigo-600">Não encontrou? Cadastre um novo...</option>
-                                </select>
-                                {setorIdSelecionado === '__novo__' && (
-                                    <input type="text" placeholder="Digite o nome do novo setor" value={setorNome} onChange={e => setSetorNome(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition animate-fade-in" />
-                                )}
-                            </>
-                            )}
                             <div className="flex items-center border border-slate-300 dark:border-slate-600 rounded-lg focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition">
                                 <input type="text" placeholder="seu.usuario" value={email} onChange={e => setEmail(e.target.value)} required className="w-full px-4 py-3 bg-transparent border-0 outline-none" />
                                 <span className="px-4 py-3 bg-slate-100/50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 rounded-r-lg">
                                     @tjpr.jus.br
                                 </span>
                             </div>
+                            {!isLogin && <input type="password" placeholder="Confirmar Palavra-passe" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />}
                             <input type="password" placeholder="Palavra-passe" value={password} onChange={e => setPassword(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />
                             <div className="flex items-center justify-between text-sm">
                                 <label className="flex items-center gap-2 text-slate-600 dark:text-slate-300"><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"/>Lembrar-me</label>
@@ -1204,7 +1027,6 @@ const AdminPage = ({ setCurrentArea }) => {
      const { user } = useAuth();
      // Estado para controlar a visão dentro da página de Admin: 'stats', 'calendar', 'users'
      const [adminSection, setAdminSection] = useState('stats'); // 'stats', 'calendar' ou 'users'
-
      const [stats, setStats] = useState({ total: 0, perMateria: {}, perPrazo: {}, byDay: {} });
      const [statsView, setStatsView] = useState('calculadora'); // 'calculadora' ou 'djen_consulta'
      const [allData, setAllData] = useState([]);
@@ -1658,7 +1480,7 @@ const AdminPage = ({ setCurrentArea }) => {
                     <button onClick={() => setAdminSection('users')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'users' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>
                         {adminUserData.role === 'setor_admin' ? 'Usuários' : 'Usuários e Setores'}
                     </button>
-                    {(adminUserData.role === 'admin' || adminUserData.role === 'setor_admin') && <button onClick={() => setAdminSection('minutas')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'minutas' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>Gerir Minutas</button>}
+                    {/* O botão para Minutas foi removido */}
                     {adminUserData.role === 'admin' && <button onClick={() => setAdminSection('calendar')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'calendar' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>Gerir Calendário</button>}
                     {adminUserData.role === 'admin' && <button onClick={() => setAdminSection('chamados')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'chamados' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>Chamados</button>}
                 </div>
@@ -1789,9 +1611,6 @@ const AdminPage = ({ setCurrentArea }) => {
         {adminSection === 'chamados' && (
             <BugReportsPage />
         )}
-        {adminSection === 'minutas' && (
-            <MinutasAdminPage />
-        )}
         {adminSection === 'users' && (<div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl p-6 sm:p-8 rounded-2xl shadow-lg border border-slate-200/50 dark:border-slate-700/50 space-y-6">
     <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Gerenciamento de Usuários e Setores</h2>
     <div className="relative">
@@ -1912,10 +1731,15 @@ const AdminPage = ({ setCurrentArea }) => {
                                             <select value={u.setorId || ''} onChange={(e) => handleSectorChange(u.id, e.target.value)} className="w-full p-2 text-sm rounded-md bg-white/50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700">
                                                 <option value="">Nenhum</option>
                                                 {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-                                            </select><br/>
-                                            <span className={`mt-1 inline-block px-2 py-0.5 text-xs font-semibold rounded-full ${u.emailVerified ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'}`}>
-                                                {u.emailVerified ? 'Verificado' : 'Não Verificado'}
-                                            </span>
+                                            </select>
+                                            <div className="mt-1">
+                                                <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${u.emailVerified ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'}`}>
+                                                    {u.emailVerified ? 'Verificado' : 'Não Verificado'}
+                                                </span>
+                                                {!u.emailVerified && (
+                                                    <button onClick={() => handleManualVerification(u.id)} className="ml-2 text-xs font-semibold text-indigo-600 hover:underline">Verificar Manualmente</button>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-4 py-3 text-right">
                                             <button onClick={() => handleOpenUserManagementModal(u)} className="font-semibold text-indigo-600 hover:text-indigo-500">Gerenciar</button>
