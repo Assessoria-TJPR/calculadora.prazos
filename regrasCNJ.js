@@ -21,9 +21,14 @@ const aplicarRegraEspecialCorpusChristi = (feriados, decretos) => {
     // Remove a data do mapa de feriados para forçar o tratamento como "feriado_cnj".
     delete feriados[DATA_CORPUS_CHRISTI];
 
-    // Adiciona/sobrescreve as datas no mapa de decretos com um tipo especial.
-    decretos[DATA_CORPUS_CHRISTI] = { motivo: 'Corpus Christi', tipo: 'feriado_cnj' };
-    decretos[DATA_POS_CORPUS_CHRISTI] = { motivo: 'Suspensão de expediente (pós Corpus Christi)', tipo: 'feriado_cnj' };
+    // CORREÇÃO: Modifica o objeto existente em vez de criar um novo.
+    // Isso preserva o motivo que veio do banco de dados.
+    if (decretos[DATA_CORPUS_CHRISTI]) {
+        decretos[DATA_CORPUS_CHRISTI].tipo = 'feriado_cnj';
+    }
+    if (decretos[DATA_POS_CORPUS_CHRISTI]) {
+        decretos[DATA_POS_CORPUS_CHRISTI].tipo = 'feriado_cnj';
+    }
 };
 
 /**

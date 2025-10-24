@@ -123,7 +123,10 @@ const AuthProvider = ({ children }) => {
             try {
                 const userDoc = await db.collection('users').doc(firebaseUser.uid).get();
                 if (userDoc.exists) {
-                    setUserData(userDoc.data());
+                    const newData = userDoc.data();
+                    // Somente atualiza o estado se os dados realmente mudaram para evitar re-renderizações desnecessárias
+                    // e re-buscas no Firestore em componentes que dependem de userData.
+                    setUserData(prevData => (JSON.stringify(prevData) === JSON.stringify(newData) ? prevData : newData));
                 } else {
                     // Se o documento ainda não existe após a espera, é provável que tenha ocorrido um erro.
                     // Desloga o usuário por segurança.
@@ -155,10 +158,15 @@ const AuthProvider = ({ children }) => {
 
     useEffect(() => {
         const handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible' && auth.currentUser) {
-                // Força a atualização dos dados do usuário quando a aba se torna visível
-                updateUserAndAdminStatus(auth.currentUser);
-            }
+            // Adiciona um debounce para evitar chamadas excessivas se o usuário alternar rapidamente entre as abas.
+            // A atualização só ocorrerá se a aba permanecer visível por um curto período.
+            clearTimeout(window._visibilityChangeTimer); // Limpa qualquer timer anterior
+            window._visibilityChangeTimer = setTimeout(() => {
+                if (document.visibilityState === 'visible' && auth.currentUser) {
+                    // Força a atualização dos dados do usuário quando a aba se torna visível
+                    updateUserAndAdminStatus(auth.currentUser);
+                }
+            }, 300000); // ATUALIZAÇÃO: Espera 5 minutos (300.000 ms) antes de buscar os dados.
         };
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -269,10 +277,11 @@ const CalculadoraDePrazo = ({ numeroProcesso }) => {
     if (considerarDecretos && (tipo === 'todos' || tipo === 'decreto')) {
         if (decretosMap[dateString]) {
             // Se for um objeto (regra especial CNJ), retorna o objeto. Senão, cria um.
-            if (typeof decretosMap[dateString] === 'object') {
-                return decretosMap[dateString];
+            const decreto = decretosMap[dateString];
+            if (typeof decreto === 'object' && decreto.motivo && decreto.tipo) {
+                return decreto;
             }
-            return { motivo: decretosMap[dateString], tipo: 'decreto' };
+            return { motivo: decreto, tipo: 'decreto' };
         }
     }
     // A instabilidade é tratada separadamente, mas pode ser verificada aqui se necessário.
@@ -347,10 +356,12 @@ const CalculadoraDePrazo = ({ numeroProcesso }) => {
     
     while (diasUteisContados < prazo) {
         // 1. Verifica se o dia atual é útil ANTES de avançar.
-        const dataCorrenteStr = dataCorrente.toISOString().split('T')[0];
- 
-        // Simplificado: Sempre considera todos os motivos de dia não útil.
-        const infoDiaNaoUtil = getMotivoDiaNaoUtil(dataCorrente, true, 'todos');
+        // NOVA REGRA: Instabilidade no meio do prazo não conta.
+        // Ignoramos 'instabilidade' durante a contagem principal.
+        // Ela será tratada apenas no início e no final do prazo.
+        const infoDiaNaoUtil = getMotivoDiaNaoUtil(dataCorrente, true, 'feriado') ||
+                               getMotivoDiaNaoUtil(dataCorrente, true, 'recesso') ||
+                               getMotivoDiaNaoUtil(dataCorrente, true, 'decreto');
 
         // CORREÇÃO: A verificação de fim de semana deve ocorrer em todos os casos.
         // O `if` foi movido para fora do `else` para garantir que fins de semana sejam sempre ignorados.
@@ -375,8 +386,11 @@ const CalculadoraDePrazo = ({ numeroProcesso }) => {
     const diasProrrogados = []; // Armazena os dias que causaram a prorrogação do prazo final
 
     while (
-        (infoDiaFinalNaoUtil = getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'feriado') || 
-                               getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'recesso') || getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'decreto') || getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'instabilidade')) ||
+        // NOVA REGRA: A instabilidade prorroga o prazo final.
+        (infoDiaFinalNaoUtil = getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'feriado') ||
+                               getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'recesso') ||
+                               getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'decreto') ||
+                               getMotivoDiaNaoUtil(prazoFinalAjustado, true, 'instabilidade')) ||
         prazoFinalAjustado.getDay() === 0 || prazoFinalAjustado.getDay() === 6
     ) {
         if (infoDiaFinalNaoUtil) diasProrrogados.push({ data: new Date(prazoFinalAjustado.getTime()), ...infoDiaFinalNaoUtil });
@@ -929,13 +943,13 @@ const CalendarioModal = ({ onClose }) => {
 
     // CORREÇÃO: A função formatData agora lida com o fato de que o 'motivo' pode ser uma string ou um objeto.
     const formatData = (map, defaultTipo) => {
-        return Object.entries(map).map(([data, value]) => {
-            if (typeof value === 'object' && value.motivo && value.tipo) {
+        return Object.entries(map).map(([data, decreto]) => {
+            if (typeof decreto === 'object' && decreto.motivo && decreto.tipo) {
                 // Se for um objeto (como o Feriado CNJ), usa os dados do objeto.
-                return { data, motivo: value.motivo, tipo: value.tipo };
+                return { data, motivo: decreto.motivo, tipo: decreto.tipo };
             }
             // Caso contrário, trata como uma string simples.
-            return { data, motivo: value, tipo: defaultTipo };
+            return { data, motivo: decreto, tipo: defaultTipo };
         });
     };
 
@@ -1480,7 +1494,6 @@ const AdminPage = ({ setCurrentArea }) => {
                     <button onClick={() => setAdminSection('users')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'users' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>
                         {adminUserData.role === 'setor_admin' ? 'Usuários' : 'Usuários e Setores'}
                     </button>
-                    {/* O botão para Minutas foi removido */}
                     {adminUserData.role === 'admin' && <button onClick={() => setAdminSection('calendar')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'calendar' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>Gerir Calendário</button>}
                     {adminUserData.role === 'admin' && <button onClick={() => setAdminSection('chamados')} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${adminSection === 'chamados' ? 'bg-indigo-600 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>Chamados</button>}
                 </div>

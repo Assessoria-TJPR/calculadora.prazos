@@ -91,7 +91,8 @@ const CalendarioAdminPage = () => {
             await db.collection('configuracoes').doc('calendario').set(updatedConfig);
             setNovaEntrada({ data: '', motivo: '', tipo: 'feriado' });
             setEditando(null);
-            await fetchCalendarConfig(); // Recarrega tudo
+            setConfig(updatedConfig); // Atualiza o estado local 'config'
+            // O useEffect acima irá chamar updateAllEntriesFromConfig
             await refreshCalendar();
         } catch (err) {
             setError('Falha ao salvar a entrada.');
@@ -119,7 +120,8 @@ const CalendarioAdminPage = () => {
 
         try {
             await db.collection('configuracoes').doc('calendario').set(updatedConfig);
-            await fetchCalendarConfig();
+            setConfig(updatedConfig); // Atualiza o estado local 'config'
+            // O useEffect acima irá chamar updateAllEntriesFromConfig
             await refreshCalendar();
         } catch (err) {
             setError('Falha ao excluir a entrada.');

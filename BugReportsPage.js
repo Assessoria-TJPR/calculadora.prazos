@@ -41,7 +41,12 @@ const BugReportsPage = () => {
             if (!db) return;
             try {
                 await db.collection('bug_reports').doc(chamadoId).delete();
-                fetchChamados(); // Recarrega a lista
+                // Correção: Em vez de re-buscar tudo, apenas remove o item do estado local.
+                // Isso evita uma leitura desnecessária do Firestore.
+                // O custo é 0 leituras adicionais.
+                setChamados(prevChamados => 
+                    prevChamados.filter(c => c.id !== chamadoId)
+                );
             } catch (err) {
                 console.error("Erro ao excluir chamado:", err);
                 alert("Falha ao excluir o chamado.");
@@ -70,7 +75,16 @@ const BugReportsPage = () => {
         if (!db) return;
         try {
             await db.collection('bug_reports').doc(chamado.id).update({ status: newStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-            fetchChamados();
+            // Correção: Em vez de re-buscar tudo, atualiza o item específico no estado local.
+            // Isso evita uma leitura desnecessária do Firestore.
+            // O custo é 0 leituras adicionais.
+            setChamados(prevChamados => 
+                prevChamados.map(c => 
+                    c.id === chamado.id 
+                        ? { ...c, status: newStatus } 
+                        : c
+                )
+            );
         } catch (err) {
             console.error("Erro ao atualizar status:", err);
             alert("Falha ao atualizar o status do chamado.");
