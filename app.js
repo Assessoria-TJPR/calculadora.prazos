@@ -696,6 +696,39 @@ const LoginPage = () => {
         setError('');
         setMessage('');
 
+        // Lógica para usuário de teste
+        if (isLogin && email.trim().toLowerCase() === 'teste' && password === 'teste123') {
+            try {
+                await auth.signInWithEmailAndPassword('teste@tjpr.jus.br', 'teste123');
+                localStorage.setItem('lastUserEmail', 'teste@tjpr.jus.br');
+                return;
+            } catch (err) {
+                if (err.code === 'auth/user-not-found') {
+                    try {
+                        const userCredential = await auth.createUserWithEmailAndPassword('teste@tjpr.jus.br', 'teste123');
+                        await db.collection('users').doc(userCredential.user.uid).set({
+                            email: 'teste@tjpr.jus.br',
+                            displayName: 'Usuário Teste',
+                            role: 'basic',
+                            setorId: null,
+                            avatarColor: '#84CC16',
+                            emailVerified: true, // Auto-verificado para facilitar o teste
+                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        await userCredential.user.updateProfile({ displayName: 'Usuário Teste' });
+                        // O listener onAuthStateChanged cuidará do login após o registro.
+                        return;
+                    } catch (creationError) {
+                        setError('Falha ao criar ou logar com o usuário de teste.');
+                        return;
+                    }
+                } else {
+                    setError('Erro ao logar com o usuário de teste. A senha pode estar incorreta.');
+                    return;
+                }
+            }
+        }
+
 
         if (!email.trim()) {
             setError("Por favor, insira o seu nome de utilizador.");
@@ -829,6 +862,11 @@ const LoginPage = () => {
                 ) : (
                     <>
                         <h2 className="text-3xl font-bold text-center text-slate-800 dark:text-slate-100">{isLogin ? 'Login' : 'Criar Conta'}</h2>
+                        {isLogin && (
+                            <div className="p-3 text-sm text-center text-sky-800 rounded-lg bg-sky-50 dark:bg-sky-900/30 dark:text-sky-300" role="alert">
+                                <span className="font-medium">Atenção:</span> O seu e-mail do TJPR não está vinculado a esta calculadora. É necessário fazer um novo cadastro para acessar.
+                            </div>
+                        )}
                         <form onSubmit={handleSubmit} className="space-y-4">
                             {!isLogin && <input type="text" placeholder="Nome Completo" value={displayName} onChange={e => setDisplayName(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />}
                             <div className="flex items-center border border-slate-300 dark:border-slate-600 rounded-lg focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition">
@@ -837,8 +875,13 @@ const LoginPage = () => {
                                     @tjpr.jus.br
                                 </span>
                             </div>
-                            {!isLogin && <input type="password" placeholder="Confirmar Palavra-passe" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />}
                             <input type="password" placeholder="Palavra-passe" value={password} onChange={e => setPassword(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />
+                            {!isLogin && <input type="password" placeholder="Confirmar Palavra-passe" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required className="w-full px-4 py-3 bg-white/50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition" />}
+                            {!isLogin && (
+                                <div className="p-3 text-xs text-amber-800 rounded-lg bg-amber-50 dark:bg-amber-900/30 dark:text-amber-300" role="alert">
+                                    <span className="font-bold">Importante:</span> Por segurança, não utilize a mesma senha do seu e-mail do TJPR ou de outros sistemas.
+                                </div>
+                            )}
                             <div className="flex items-center justify-between text-sm">
                                 <label className="flex items-center gap-2 text-slate-600 dark:text-slate-300"><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"/>Lembrar-me</label>
                                 <a href="#" onClick={(e) => { e.preventDefault(); setIsResettingPassword(true); setError(''); }} className="font-medium text-indigo-600 hover:text-indigo-500">Esqueceu a sua palavra-passe?</a>
@@ -1127,6 +1170,10 @@ const AdminPage = ({ setCurrentArea }) => {
                 return combinedUsers;
             } else {
                 query = query.orderBy('displayName');
+                // CORREÇÃO: Ordenar por 'email' em vez de 'displayName'.
+                // O campo 'email' é garantido de existir em todos os documentos de usuário,
+                // enquanto 'displayName' pode estar ausente, causando um erro 400 na consulta.
+                query = query.orderBy('email');
             }
 
             const snapshot = await query.get();
